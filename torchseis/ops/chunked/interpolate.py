@@ -1,0 +1,266 @@
+# Copyright (c) 2025 Jintao Li.
+# University of Science and Technology of China (USTC).
+# All rights reserved.
+
+import itertools
+import torch
+from torch import Tensor, nn
+from torch.nn import functional as F
+
+
+def replace_upsample(module: nn.Module, bsize: int = 32):
+    """
+    Replace all nn.Upsample in the module with UpsampleChunked
+    
+    Args:
+        module: the module to replace
+        bsize: the chunk size, default is 32
+    
+    Returns:
+        the replaced module
+    """
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.Upsample):
+            setattr(module, name, UpsampleChunked(child, bsize))
+        elif len(list(child.children())) > 0:
+            replace_upsample(child, bsize)
+
+    return module
+
+
+class UpsampleChunked(nn.Module):
+
+    def __init__(self, ops: nn.Upsample, bsize: int):
+        super().__init__()
+        self.ops = ops
+        self.scale_factor = int(ops.scale_factor)
+        assert self.scale_factor - ops.scale_factor == 0
+        self.mode = ops.mode
+        self.align_corners = ops.align_corners
+        self.bsize = bsize
+
+    def forward(self, x: Tensor) -> Tensor:
+        return interpolate3d_chunked(
+            x,
+            self.bsize,
+            self.scale_factor,
+            self.mode,
+            self.align_corners,
+        )
+
+
+def trilinear_interpolate_align_corners(
+    input_tensor: Tensor,
+    orig_size: tuple,
+    start: tuple,
+    scale_factor: int = 2,
+    force_fp32: bool = False,
+) -> Tensor:
+    """
+    Note that when using chunked method, the boundary is not correct.
+    So we need to handle the boundary manually.
+    Besides, compare with F.interpolate, there is noticeable difference (1e-2 for half precision).
+
+    Parameters:
+    ------------
+    - input_tensor :
+        the input tensor, shape: [batch, channel, D_in, H_in, W_in]
+    - orig_size: 
+        the original size of the input tensor, tuple (D_orig, H_orig, W_orig)
+    - start: 
+        the start position of the input tensor, tuple (d_start, h_start, w_start)
+    - scale_factor: 
+        the scale factor
+
+    Returns:
+    --------
+    - output:
+        the output tensor, shape: [batch, channel, D_out, H_out, W_out]
+    """
+    dtype = input_tensor.dtype
+    if force_fp32:
+        input_tensor = input_tensor.to(torch.float32)
+
+    batch, channel, D_in, H_in, W_in = input_tensor.shape
+    D_out = D_in * scale_factor
+    H_out = H_in * scale_factor
+    W_out = W_in * scale_factor
+
+    D_or, H_or, W_or = orig_size
+    ds, hs, ws = start
+    D_outo = D_or * scale_factor
+    H_outo = H_or * scale_factor
+    W_outo = W_or * scale_factor
+
+    d_os = ds * scale_factor
+    h_os = hs * scale_factor
+    w_os = ws * scale_factor
+
+    d_oe = d_os + D_out - 1
+    h_oe = h_os + H_out - 1
+    w_oe = w_os + W_out - 1
+
+    d_out = torch.linspace(d_os, d_oe, D_out, device=input_tensor.device)
+    h_out = torch.linspace(h_os, h_oe, H_out, device=input_tensor.device)
+    w_out = torch.linspace(w_os, w_oe, W_out, device=input_tensor.device)
+
+    # shift d_out to the position of original data
+    d_out = d_out / (D_outo - 1)
+    h_out = h_out / (H_outo - 1)
+    w_out = w_out / (W_outo - 1)
+
+    # map the output coordinates to the input coordinates (align_corners=True mapping)
+    d_in = d_out * (D_or - 1)
+    h_in = h_out * (H_or - 1)
+    w_in = w_out * (W_or - 1)
+
+    # left/top boundary
+    d0 = torch.floor(d_in).long()
+    h0 = torch.floor(h_in).long()
+    w0 = torch.floor(w_in).long()
+
+    # right/bottom boundary
+    d1 = torch.min(d0 + 1, torch.tensor(D_or - 1, device=input_tensor.device))
+    h1 = torch.min(h0 + 1, torch.tensor(H_or - 1, device=input_tensor.device))
+    w1 = torch.min(w0 + 1, torch.tensor(W_or - 1, device=input_tensor.device))
+
+    # calculate the fractional part
+    dd = (d_in - d0.float()).view(-1, 1, 1)  # shape [D_out, 1, 1]
+    hh = (h_in - h0.float()).view(1, -1, 1)  # shape [1, H_out, 1]
+    ww = (w_in - w0.float()).view(1, 1, -1)  # shape [1, 1, W_out]
+
+    # shift d0, h0, w0 d1, h1, w1 to the position of input_tensor
+    d0 = d0 - ds
+    h0 = h0 - hs
+    w0 = w0 - ws
+    d1 = d1 - ds
+    h1 = h1 - hs
+    w1 = w1 - ws
+
+    d0 = torch.clamp(d0, 0, D_in - 1)
+    h0 = torch.clamp(h0, 0, H_in - 1)
+    w0 = torch.clamp(w0, 0, W_in - 1)
+    d1 = torch.clamp(d1, 0, D_in - 1)
+    h1 = torch.clamp(h1, 0, H_in - 1)
+    w1 = torch.clamp(w1, 0, W_in - 1)
+
+    d0_grid, h0_grid, w0_grid = torch.meshgrid(d0, h0, w0, indexing='ij')
+    d1_grid, h1_grid, w1_grid = torch.meshgrid(d1, h1, w1, indexing='ij')
+
+    output = torch.zeros(
+        (batch, channel, D_out, H_out, W_out),
+        device=input_tensor.device,
+        dtype=input_tensor.dtype,
+    )
+
+    for b in range(batch):
+        for c in range(channel):
+            c000 = input_tensor[b, c, d0_grid, h0_grid, w0_grid]
+            c001 = input_tensor[b, c, d0_grid, h0_grid, w1_grid]
+            c010 = input_tensor[b, c, d0_grid, h1_grid, w0_grid]
+            c011 = input_tensor[b, c, d0_grid, h1_grid, w1_grid]
+            c100 = input_tensor[b, c, d1_grid, h0_grid, w0_grid]
+            c101 = input_tensor[b, c, d1_grid, h0_grid, w1_grid]
+            c110 = input_tensor[b, c, d1_grid, h1_grid, w0_grid]
+            c111 = input_tensor[b, c, d1_grid, h1_grid, w1_grid]
+
+            c00 = c000 * (1 - ww) + c001 * ww
+            c01 = c010 * (1 - ww) + c011 * ww
+            c10 = c100 * (1 - ww) + c101 * ww
+            c11 = c110 * (1 - ww) + c111 * ww
+
+            c0 = c00 * (1 - hh) + c01 * hh
+            c1 = c10 * (1 - hh) + c11 * hh
+
+            output[b, c] = c0 * (1 - dd) + c1 * dd
+
+    return output.to(dtype)
+
+
+def interpolate3d_chunked(
+    x: Tensor,
+    bsize: int,
+    scale_factor: int = 2,
+    mode: str = 'nearest',
+    align_corners: bool | None = None,
+) -> Tensor:
+    """
+    if set align_corners to True, there is noticeable difference compared with F.interpolate (1e-2 for half precision).
+    """
+    assert mode in [
+        'nearest', 'trilinear'
+    ], f"Only support 'nearest' or 'trilinear' mode, but got {mode}"
+    if mode == 'nearest':
+        align_corners = None
+        pad = 0
+    else:
+        pad = 1
+
+    b, c, d, h, w = x.shape
+
+    outshape = (
+        b,
+        c,
+        int(d * scale_factor),
+        int(h * scale_factor),
+        int(w * scale_factor),
+    )
+
+    out = torch.zeros(outshape, device=x.device, dtype=x.dtype)
+
+    tsize = bsize - pad * 2
+    nb_d = (d + tsize - 1) // tsize
+    nb_h = (h + tsize - 1) // tsize
+    nb_w = (w + tsize - 1) // tsize
+
+    for i, j, k in itertools.product(range(nb_d), range(nb_h), range(nb_w)):
+        v_d0 = i * tsize
+        v_h0 = j * tsize
+        v_w0 = k * tsize
+
+        v_d1 = min(v_d0 + tsize, d)
+        v_h1 = min(v_h0 + tsize, h)
+        v_w1 = min(v_w0 + tsize, w)
+
+        p_d0 = max(0, v_d0 - pad)
+        p_h0 = max(0, v_h0 - pad)
+        p_w0 = max(0, v_w0 - pad)
+
+        p_d1 = min(d, v_d1 + pad)
+        p_h1 = min(h, v_h1 + pad)
+        p_w1 = min(w, v_w1 + pad)
+
+        r_d0 = (v_d0 - p_d0) * scale_factor
+        r_d1 = r_d0 + (v_d1 - v_d0) * scale_factor
+        r_h0 = (v_h0 - p_h0) * scale_factor
+        r_h1 = r_h0 + (v_h1 - v_h0) * scale_factor
+        r_w0 = (v_w0 - p_w0) * scale_factor
+        r_w1 = r_w0 + (v_w1 - v_w0) * scale_factor
+
+        o_d0 = v_d0 * scale_factor
+        o_h0 = v_h0 * scale_factor
+        o_w0 = v_w0 * scale_factor
+
+        o_d1 = v_d1 * scale_factor
+        o_h1 = v_h1 * scale_factor
+        o_w1 = v_w1 * scale_factor
+
+        with torch.no_grad():
+            patchi = x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
+            if align_corners:
+                patcho = trilinear_interpolate_align_corners(
+                    patchi,
+                    (d, h, w),
+                    (p_d0, p_h0, p_w0),
+                    scale_factor,
+                )
+            else:
+                patcho = F.interpolate(
+                    patchi,
+                    scale_factor=scale_factor,
+                    mode=mode,
+                    align_corners=align_corners,
+                )
+            out[:, :, o_d0:o_d1, o_h0:o_h1, o_w0:o_w1] = patcho[:, :, r_d0:r_d1, r_h0:r_h1, r_w0:r_w1] # yapf: disable
+
+    return out
