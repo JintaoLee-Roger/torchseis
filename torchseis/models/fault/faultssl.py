@@ -150,7 +150,7 @@ class FaultSSL(nn.Module, FaultSSLChunk):
                     norm(int(c * 2) * (2**2)),
                     nn.ReLU(inplace=True),
                 )
-            ),  # ToDo Why the new branch derives from the "upper" branch only?
+            ),
         ])
 
         self.stage3 = nn.Sequential(

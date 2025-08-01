@@ -78,6 +78,8 @@ class ChunkStatistics:
         if not isinstance(x, Tensor):
             raise TypeError("Input must be torch.Tensor")
 
+        if x.numel() == 0:
+            return
         self.device = x.device
         self.dtype = x.dtype
 
@@ -206,12 +208,91 @@ class ChunkStatistics:
             self.current_M2 = None
 
 
+
+class ChunkedAdaptiveAvgPool3d1(nn.Module):
+    def __init__(self):
+        self.acc = None             # accumulator for sum over voxels, shape (N, C)
+        self.total_voxels = 0       # total count of voxels added
+        self.out = None
+        self.device = None
+        self.dtype = None
+    
+    def add_batch(self, x: Tensor):
+        """
+        Add a chunk of the volume for pooling.
+
+        Args:
+            x: Tensor of shape (N, C, d, h, w)
+        """
+        if not isinstance(x, Tensor):
+            raise TypeError("Input must be a torch.Tensor")
+        if x.dim() != 5:
+            raise ValueError(f"Expected 5D tensor, got {x.dim()}D")
+
+        N, C, d, h, w = x.shape
+        # sum over spatial dims d,h,w -> shape (N, C)
+        sum_block = x.float().sum(dim=(2, 3, 4))
+
+        # initialize accumulator
+        if self.acc is None:
+            self.acc = sum_block.clone()
+            self.device = x.device
+            self.dtype = x.dtype
+        else:
+            if sum_block.shape != self.acc.shape:
+                raise ValueError(f"Chunk shape mismatch: {sum_block.shape} vs {self.acc.shape}")
+            self.acc += sum_block.to(self.device)
+
+        # print(self.acc)
+        # update voxel count
+        self.total_voxels += d * h * w
+
+    def compute(self) -> Tensor:
+        """
+        Compute the global average pooling result.
+
+        Returns:
+            Tensor of shape (N, C, 1, 1, 1)
+        """
+        if self.acc is None or self.total_voxels == 0:
+            raise RuntimeError("No chunks added for pooling")
+
+        # compute mean over all added voxels
+        mean = self.acc / self.total_voxels  # shape (N, C)
+        # reshape to (N, C, 1, 1, 1) and cast back
+        self.out = mean.to(self.dtype).to(self.device).view(*mean.shape, 1, 1, 1)
+
+    @property
+    def output(self) -> Tensor:
+        """
+        Get the computed output tensor.
+
+        Returns:
+            Tensor of shape (N, C, 1, 1, 1)
+        """
+        if self.out is None:
+            raise RuntimeError("Output not computed yet. Call compute() first.")
+        return self.out
+    
+    def has_statistics(self) -> bool:
+        return self.out is not None
+    
+    def reset(self):
+        """
+        Reset the accumulator and output.
+        """
+        self.acc = None
+        self.out = None
+        self.total_voxels = 0
+        self.device = None
+        self.dtype = None
+
+
 if __name__ == "__main__":
 
     import time
     dims = (2, 3)
-    x = torch.rand(11, 2, 512, 512).cuda() + torch.randn(11, 2, 512,
-                                                         512).cuda()
+    x = torch.rand(11, 2, 512, 512).cuda() + torch.randn(11, 2, 512, 512).cuda()
     x = x * 1000
     x = x.half()
     t1 = time.time()

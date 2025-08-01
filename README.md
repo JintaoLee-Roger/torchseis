@@ -6,7 +6,7 @@ PyTorch-based seismic toolkit.
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/torchseis.git
+git clone https://github.com/JintaoLee-Roger/torchseis.git
 cd torchseis
 pip install -e .
 ```
@@ -19,7 +19,7 @@ import torch
 from torchseis import FaultSeg3d, FaultPipeline
 
 model = FaultSeg3d()
-params = torch.load('faultseg3d-2020-70.pt', weights_only=True)
+params = torch.load('faultseg3d-2020-70.pth', weights_only=True)
 model.load_state_dict(params)
 pipeline = FaultPipeline(model).half().cuda()
 

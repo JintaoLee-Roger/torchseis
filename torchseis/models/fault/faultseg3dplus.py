@@ -20,7 +20,6 @@ To cite this model:
 
 import torch
 from torch import nn, Tensor
-import torch.nn.functional as F
 from ._faultseg_modules import BasicBlock, FuseOps
 from ...ops.chunked.conv import Conv3dChunked
 from ...ops.chunked.interpolate import UpsampleChunked
@@ -125,37 +124,25 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
 
         out = self.conv5(out)
 
-        if out.numel() * 8 > 2**31 - 1:
-            out = UpsampleChunked(self.up6, 64)(out)
-        else:
-            out = self.up6(out)
+        out = self.up6(out)
         out = torch.cat([out, encoder_features[3]], dim=1)
         out = self.conv6(out)
 
-        if out.numel() * 8 > 2**31 - 1:
-            out = UpsampleChunked(self.up7, 64)(out)
-        else:
-            out = self.up7(out)
+        out = self.up7(out)
         out = torch.cat([out, encoder_features[2]], dim=1)
         out = self.conv7(out)
 
-        if out.numel() * 8 > 2**31 - 1:
-            out = UpsampleChunked(self.up8, 64)(out)
-        else:
-            out = self.up8(out)
+        out = self.up8(out)
         out = torch.cat([out, encoder_features[1]], dim=1)
         out = self.conv8(out)
 
-        if out.numel() * 8 > 2**31 - 1:
-            out = UpsampleChunked(self.up9, 64)(out)
-        else:
-            out = self.up9(out)
+        out = self.up9(out)
         out = torch.cat([out, encoder_features[0]], dim=1)
         out = self.conv9(out)
 
         out = self.conv10(out)
 
-        return F.sigmoid(out)
+        return torch.sigmoid(out)
 
     def forward2(self, x: Tensor, rank: int = 0) -> Tensor:
         """
@@ -168,7 +155,7 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
         encoder_features = []
 
         if rank == 0:
-            enc1 = self.conv1.chuncked_conv_forward(x)
+            enc1 = self.conv1.chunked_conv_forward(x)
             encoder_features.append(enc1)
             enc2 = self.pool1(enc1)
         elif rank == 1:
@@ -186,35 +173,35 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
             encoder_features.append(None)
 
         if rank == 0:
-            enc2 = self.conv2.chuncked_conv_forward(enc2)
+            enc2 = self.conv2.chunked_conv_forward(enc2)
         else:
             enc2 = self.fuse_forward(enc2, self.conv2, mode='down')
         encoder_features.append(enc2)
         enc3 = self.pool2(enc2)
 
         if rank == 0:
-            enc3 = self.conv3.chuncked_conv_forward(enc3)
+            enc3 = self.conv3.chunked_conv_forward(enc3)
         else:
             enc3 = self.fuse_forward(enc3, self.conv3, mode='down')
         encoder_features.append(enc3)
         out = self.pool3(enc3)
 
         if rank == 0:
-            out = self.conv4.chuncked_conv_forward(out)
+            out = self.conv4.chunked_conv_forward(out)
         else:
             out = self.fuse_forward(out, self.conv4, mode='down')
         encoder_features.append(out)
         out = self.pool4(out)
 
         if rank == 0:
-            out = self.conv5.chuncked_conv_forward(out)
+            out = self.conv5.chunked_conv_forward(out)
         else:
             out = self.fuse_forward(out, self.conv5, mode='down')
 
         if rank == 0:
             out = UpsampleChunked(self.up6, 64)(out)
             out = torch.cat([out, encoder_features[3]], dim=1)
-            out = self.conv6.chuncked_conv_forward(out)
+            out = self.conv6.chunked_conv_forward(out)
         else:
             out = self.fuse_forward(
                 out,
@@ -227,7 +214,7 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
         if rank == 0:
             out = UpsampleChunked(self.up7, 64)(out)
             out = torch.cat([out, encoder_features[2]], dim=1)
-            out = self.conv7.chuncked_conv_forward(out)
+            out = self.conv7.chunked_conv_forward(out)
         else:
             out = self.fuse_forward(
                 out,
@@ -240,7 +227,7 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
         if rank == 0:
             out = UpsampleChunked(self.up8, 64)(out)
             out = torch.cat([out, encoder_features[1]], dim=1)
-            out = self.conv8.chuncked_conv_forward(out)
+            out = self.conv8.chunked_conv_forward(out)
         else:
             out = self.fuse_forward(
                 out,
@@ -253,7 +240,7 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
         if rank == 0:
             out = UpsampleChunked(self.up9, 64)(out)
             out = torch.cat([out, encoder_features[0]], dim=1)
-            out = self.conv9.chuncked_conv_forward(out)
+            out = self.conv9.chunked_conv_forward(out)
             out = Conv3dChunked(self.conv10, 64)(out)
         elif rank == 1:
             out = self.fuse_forward(
@@ -274,7 +261,7 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
                 up=self.up9,
             )
 
-        return F.sigmoid(out)
+        return torch.sigmoid(out)
 
 
 if __name__ == "__main__":

@@ -60,6 +60,7 @@ def trilinear_interpolate_align_corners(
     Note that when using chunked method, the boundary is not correct.
     So we need to handle the boundary manually.
     Besides, compare with F.interpolate, there is noticeable difference (1e-2 for half precision).
+    # NOTE: I'm not sure if this need to pad first
 
     Parameters:
     ------------

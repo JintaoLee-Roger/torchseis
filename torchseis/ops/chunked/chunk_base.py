@@ -7,6 +7,58 @@ import torch
 from torch.nn import functional as F
 
 
+def get_index(i, j, k, bsize, shape, pad, scale=1):
+    v_d0 = i * bsize
+    v_h0 = j * bsize
+    v_w0 = k * bsize
+    d, h, w = shape
+
+    v_d1 = min(v_d0 + bsize, d)
+    v_h1 = min(v_h0 + bsize, h)
+    v_w1 = min(v_w0 + bsize, w)
+
+    p_d0 = max(0, v_d0 - pad)
+    p_h0 = max(0, v_h0 - pad)
+    p_w0 = max(0, v_w0 - pad)
+
+    p_d1 = min(d, v_d1 + pad)
+    p_h1 = min(h, v_h1 + pad)
+    p_w1 = min(w, v_w1 + pad)
+
+    padlist = [0, 0, 0, 0, 0, 0]
+
+    if v_d1 == p_d1:
+        padlist[5] = pad
+    if v_h1 == p_h1:
+        padlist[3] = pad
+    if v_w1 == p_w1:
+        padlist[1] = pad
+    if v_d0 == p_d0:
+        padlist[4] = pad
+    if v_h0 == p_h0:
+        padlist[2] = pad
+    if v_w0 == p_w0:
+        padlist[0] = pad
+
+    r_d0 = int((v_d0 - p_d0 + padlist[4]) * scale)
+    r_d1 = r_d0 + int((v_d1 - v_d0) * scale)
+    r_h0 = int((v_h0 - p_h0 + padlist[2]) * scale)
+    r_h1 = r_h0 + int((v_h1 - v_h0) * scale)
+    r_w0 = int((v_w0 - p_w0 + padlist[0]) * scale)
+    r_w1 = r_w0 + int((v_w1 - v_w0) * scale)
+
+    o_d0 = int(v_d0 * scale)
+    o_h0 = int(v_h0 * scale)
+    o_w0 = int(v_w0 * scale)
+
+    o_d1 = int(v_d1 * scale)
+    o_h1 = int(v_h1 * scale)
+    o_w1 = int(v_w1 * scale)
+
+    return v_d0, v_h0, v_w0, v_d1, v_h1, v_w1, p_d0, p_h0, p_w0, p_d1, p_h1, p_w1, r_d0, r_h0, r_w0, r_d1, r_h1, r_w1, o_d0, o_h0, o_w0, o_d1, o_h1, o_w1, padlist
+
+
+
 def chunk_forward(
     x,
     ops,

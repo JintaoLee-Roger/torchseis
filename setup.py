@@ -7,7 +7,7 @@ setup(
     description="", 
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/JintaoLee-Roger/seistorch",
+    url="https://github.com/JintaoLee-Roger/torchseis",
     packages=find_packages(),
     # install_requires=open(
     #     "requirements.txt").read().splitlines(),

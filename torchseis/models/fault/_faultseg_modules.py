@@ -34,7 +34,7 @@ class BasicBlock(nn.Module):
         x = self.relu2(x)
         return x
 
-    def chuncked_conv_forward(self, x: Tensor, bsize: int = 128):
+    def chunked_conv_forward(self, x: Tensor, bsize: int = 128):
         x = Conv3dChunked(self.conv1, bsize)(x)
         x = self.relu1(x)
         x = Conv3dChunked(self.conv2, bsize)(x)
