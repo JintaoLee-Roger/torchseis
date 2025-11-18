@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
 import itertools
 import torch
 from torch import nn, Tensor

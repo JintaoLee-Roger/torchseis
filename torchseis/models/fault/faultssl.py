@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
 """
 FaultSSL model is a semisupervised learning model for seismic fault detection.
 
@@ -149,8 +153,7 @@ class FaultSSL(nn.Module, FaultSSLChunk):
                     ),
                     norm(int(c * 2) * (2**2)),
                     nn.ReLU(inplace=True),
-                )
-            ),
+                )),
         ])
 
         self.stage3 = nn.Sequential(
@@ -183,8 +186,8 @@ class FaultSSL(nn.Module, FaultSSLChunk):
         )
 
     def forward(self, x: Tensor, rank=0) -> Tensor:
-        if rank > 0:
-            return self.forward2(x)
+        if rank != 0:
+            return self.forward2(x, rank - 1)
         # x = self.prepad(x)
         skip1 = self.input_layer1(x)  # 24, N
         skip2 = self.input_layer2(skip1)  # 48, N//2
@@ -217,14 +220,29 @@ class FaultSSL(nn.Module, FaultSSLChunk):
         return torch.sigmoid(x)
 
     @torch.no_grad()
-    def forward2(self, x: Tensor) -> Tensor:
+    def forward2(self, x: Tensor, rank=0, *args, **kwargs) -> Tensor:
         assert not self.training
         res = x
 
-        if self.mode == 'iou':
-            x = self._input_layer12(x, 128, down=True)
+        if rank == 0:
+            x = Conv3dChunked(self.input_layer1[0], 64)(x)
+            x = self.input_layer1[1:3](x)
+            x = self.input_layer1[3].chunk_conv_forward(x)
+            skip1 = self.input_layer1[4].chunk_conv_forward(x)
+            x = Conv3dChunked(self.input_layer2[0], 64)(skip1)
+            x = self.input_layer2[1:3](x)
+        elif rank == 1:
+            if self.mode == 'iou':
+                skip1 = self._input_layer12(x, 128, down=False)
+            else:
+                skip1 = self._input_layer1(x, 128, down=False)
+            x = Conv3dChunked(self.input_layer2[0], 64)(skip1)
+            x = self.input_layer2[1:3](x)
         else:
-            x = self._input_layer1(x, 128, down=True)
+            if self.mode == 'iou':
+                x = self._input_layer12(x, 128, down=True)
+            else:
+                x = self._input_layer1(x, 128, down=True)
 
         x = self.input_layer2[3].chunk_conv_forward(x)
         skip2 = self.input_layer2[4].chunk_conv_forward(x)
@@ -237,13 +255,13 @@ class FaultSSL(nn.Module, FaultSSLChunk):
 
         # 48, N//4; 96, N//8;
         self.transition1[0][0] = Conv3dChunked(self.transition1[0][0], 32)
-        self.transition1[1][0][0] = Conv3dChunked(self.transition1[1][0][0], 32)
+        self.transition1[1][0][0] = Conv3dChunked(self.transition1[1][0][0],
+                                                  32)
         x = [trans(x) for trans in self.transition1]
 
         # Unchunked
         self.transition1[0][0] = self.transition1[0][0].ops
         self.transition1[1][0][0] = self.transition1[1][0][0].ops
-
 
         x = self.stage2(x)  # 48, N//4; 96, N//8
 
@@ -269,10 +287,24 @@ class FaultSSL(nn.Module, FaultSSLChunk):
         x = self.Decoder1[1:3](x)  # 48, N//2
         x = self.Decoder1[3].chunk_conv_forward(x)  # 48, N//2
 
-        if self.mode == 'iou':
-            x = self._decoder232(x, skip2, res)
+        if rank == 0:
+            x = self.Decoder2[0].chunk_conv_forward(torch.cat([x, skip2],
+                                                              1))  # 24, N
+            x = ConvTranspose3dChunked(self.Decoder2[1], 64)(x)
+            x = self.Decoder2[2:4](x)
+            x = self.Decoder2[4].chunk_conv_forward(x)
+            x = self.Decoder3[0].chunk_conv_forward(torch.cat([x, skip1], 1))
+            x = self.Decoder3[1](x)
+        elif rank == 1:
+            if self.mode == 'iou':
+                x = self._decoder232(x, skip2, skip1=skip1)
+            else:
+                x = self._decoder23(x, skip2, skip1=skip1)
         else:
-            x = self._decoder23(x, skip2, res)
+            if self.mode == 'iou':
+                x = self._decoder232(x, skip2, inp=res)
+            else:
+                x = self._decoder23(x, skip2, inp=res)
         return torch.sigmoid(x)
 
     def load_state_dict(self, state_dict):
@@ -292,19 +324,21 @@ class FaultSSL(nn.Module, FaultSSLChunk):
     def fuse_model(self):
         assert self.mode != 'iou', "Unsupport now!"
         if self.fused:
-            return 
+            return
         assert not self.training
         if not isinstance(self.input_layer1[1], nn.BatchNorm3d):
             self.fused = True
             return
         # fuse_modules(self.input_layer1, ['0', '1'], inplace=True)
-        self.input_layer1[0] = ConvBatchNorm3d(self.input_layer1[0], self.input_layer1[1])
+        self.input_layer1[0] = ConvBatchNorm3d(self.input_layer1[0],
+                                               self.input_layer1[1])
         self.input_layer1[1] = nn.Identity()
         self.input_layer1[3].fuse_model()
         self.input_layer1[4].fuse_model()
 
         # fuse_modules(self.input_layer2, ['0', '1'], inplace=True)
-        self.input_layer2[0] = ConvBatchNorm3d(self.input_layer2[0], self.input_layer2[1])
+        self.input_layer2[0] = ConvBatchNorm3d(self.input_layer2[0],
+                                               self.input_layer2[1])
         self.input_layer2[1] = nn.Identity()
         self.input_layer2[3].fuse_model()
 

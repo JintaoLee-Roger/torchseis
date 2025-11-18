@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Jintao Li.
+# Zhejiang University (ZJU).
 # University of Science and Technology of China (USTC).
 # All rights reserved.
 
@@ -76,6 +77,22 @@ class ConvTranspose3dChunked(nn.Module):
         return conv_transpose3d_chunked(x, self.ops, self.bsize, **kwargs)
 
 
+
+def _conv3d_chunked(
+    x: Tensor,
+    ops: nn.Conv3d,
+    bsize: int,
+    **kwargs,
+):
+    # TODO: use general style
+    assert isinstance(ops, (nn.Conv3d, ConvReLU3d)), "Only support Conv3d"
+    assert x.ndim == 5, "Only support 5D input"
+
+    b, c, d, h, w = x.shape
+    
+
+
+
 def conv3d_chunked(
     x: Tensor,
     ops: nn.Conv3d,
@@ -103,11 +120,18 @@ def conv3d_chunked(
         stride = ops.stride
         kernel_size = ops.kernel_size
 
+    def _wrap(x):
+        return x
+    if padding_mode != 'zeros':
+        def _wrap(x):
+            return x.contiguous()
+
     if padding_mode == "zeros":
         padding_mode = "constant"
         padding_value = 0
     else:
         padding_value = None
+        ops.padding_mode = "zeros"
 
     # fmt: off
     out_d = (d + 2 * pad[0] - dilation[0] * (kernel_size[0] - 1) - 1) // stride[0] + 1
@@ -181,7 +205,7 @@ def conv3d_chunked(
         o_w1 = v_w1 // scale[2]
 
         with torch.no_grad():
-            patchi = x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
+            patchi = _wrap(x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1])
             if sum(padlist) > 0:
                 patcho = F.pad(
                     patchi,
@@ -198,8 +222,12 @@ def conv3d_chunked(
 
     if isinstance(ops, ConvReLU3d):
         ops[0].padding = pad
+        if padding_mode != "constant":
+            ops[0].padding_mode = padding_mode
     else:
         ops.padding = pad
+        if padding_mode != "constant":
+            ops.padding_mode = padding_mode
     return out
 
 

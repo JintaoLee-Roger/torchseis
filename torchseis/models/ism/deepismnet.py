@@ -18,6 +18,7 @@ import torch
 from torch import nn, Tensor
 from ._deepismnet_block import _FuseOps, BasicBlock, UpConv, UP
 from ...ops.chunked.conv import Conv3dChunked
+import time
 
 
 class DeepISMNet(nn.Module, _FuseOps):
@@ -26,7 +27,7 @@ class DeepISMNet(nn.Module, _FuseOps):
         super(DeepISMNet, self).__init__()
 
         in_ch = 2 if not use_norm else 5
-        self.in_c = in_ch 
+        self.in_c = in_ch
         self.out_c = 1
 
         self.maxpool = nn.MaxPool3d(kernel_size=2, stride=2)
@@ -51,7 +52,9 @@ class DeepISMNet(nn.Module, _FuseOps):
 
         self.conv_1x1 = nn.Conv3d(51, 1, 1, 1, 0)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rank=0) -> Tensor:
+        if rank != 0:
+            return self.forward2(x, rank - 1)
         x1 = self.conv1(x)
 
         x2 = self.maxpool(x1)
@@ -86,10 +89,14 @@ class DeepISMNet(nn.Module, _FuseOps):
 
         return out
 
-    def forward2(self, x: Tensor, rank: int = 0) -> Tensor:
+    @torch.no_grad()
+    def forward2(self, x: Tensor, rank: int = 0, *args, **kwargs) -> Tensor:
+        if rank < 0:
+            rank = 2
         assert not self.training
         assert rank in [0, 1, 2]
 
+        # t1 = time.time()
         res = x
         if rank == 0:
             x1 = self.conv1.chunked_conv_forward(x)
@@ -105,11 +112,19 @@ class DeepISMNet(nn.Module, _FuseOps):
                 pool=self.maxpool,
             )
 
+        # print(x2.max().item())
+        # t2 = time.time()
+        # print(f'conv1 time: {t2-t1:.3f}s')
+
         if rank == 0:
             x2 = self.conv2.chunked_conv_forward(x2)
         else:
             x2 = self.down_fuse(x2, self.conv2, False)
         x3 = self.maxpool(x2)
+
+        # print(x3.max().item())
+        # t3 = time.time()
+        # print(f'conv2 time: {t3-t2:.3f}s')
 
         if rank == 0:
             x3 = self.conv3.chunked_conv_forward(x3)
@@ -118,16 +133,28 @@ class DeepISMNet(nn.Module, _FuseOps):
 
         x4 = self.maxpool(x3)
 
+        # print(x4.max().item())
+        # t4 = time.time()
+        # print(f'conv3 time: {t4-t3:.3f}s')
+
         if rank == 0:
             x4 = self.conv4.chunked_conv_forward(x4)
         else:
             x4 = self.down_fuse(x4, self.conv4, False)
         out = self.maxpool(x4)
 
+        # print(out.max().item())
+        # t5 = time.time()
+        # print(f'conv4 time: {t5-t4:.3f}s')
+
         if rank == 0:
             out = self.conv5.chunked_conv_forward(out)
         else:
             out = self.down_fuse(out, self.conv5, False)
+
+        # print(out.max().item())
+        # t6 = time.time()
+        # print(f'conv5 time: {t6-t5:.3f}s')
 
         if rank == 0:
             out = self.up5.chunked_conv_forward(out, x4.shape[2:])
@@ -141,6 +168,10 @@ class DeepISMNet(nn.Module, _FuseOps):
                 self.up5,
             )
 
+        # print(out.max().item())
+        # t7 = time.time()
+        # print(f'up5 time: {t7-t6:.3f}s')
+
         if rank == 0:
             out = self.up4.chunked_conv_forward(out, x3.shape[2:])
             out = torch.cat([x3, out], dim=1)
@@ -152,6 +183,10 @@ class DeepISMNet(nn.Module, _FuseOps):
                 self.up_conv4,
                 self.up4,
             )
+        
+        # print(out.max().item())
+        # t8 = time.time()
+        # print(f'up4 time: {t8-t7:.3f}s')
 
         if rank == 0:
             out = self.up3.chunked_conv_forward(out, x2.shape[2:])
@@ -164,6 +199,10 @@ class DeepISMNet(nn.Module, _FuseOps):
                 self.up_conv3,
                 self.up3,
             )
+
+        # print(out.max().item())
+        # t9 = time.time()
+        # print(f'up3 time: {t9-t8:.3f}s')
 
         if rank == 0:
             out = self.up2.chunked_conv_forward(out, x1.shape[2:])
@@ -186,5 +225,8 @@ class DeepISMNet(nn.Module, _FuseOps):
                 self.up2,
                 self.conv_1x1,
             )
+        # print(out.max().item())
+        # t10 = time.time()
+        # print(f'up2 time: {t10-t9:.3f}s')
 
         return out

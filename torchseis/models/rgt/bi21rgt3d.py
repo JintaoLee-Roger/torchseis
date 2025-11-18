@@ -15,7 +15,7 @@ To cite this model:
 }
 ```
 """
-
+import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from ._bi21rgt3d_blocks import BasicBlock, UP, _FuseOps
@@ -120,28 +120,9 @@ class Bi21RGT3d(nn.Module, _FuseOps):
             nn.InstanceNorm3d(1),
         )
 
-    def encoder(self, x: Tensor):
-        x_block0 = self.layer0(x) # 1->16, H->H
-
-        x = self.layer1(x_block0) # 16->16, H->H
-        x_block1 = self.layer2(x) # 16->32, H->H/2
-        x_block2 = self.layer3(x_block1) # 32->64, H/2->H/4
-        x_block3 = self.layer4(x_block2) # 64->128, H/4->H/8
-
-        x = self.layer5(x_block3) # 128->256, H/8->H/8
-        x = self.layer7(x) # 256->512, H/8->H/8
-        x_block4 = self.layer8(x) # 512->512, H/8->H/8
-
-        return x_block0, x_block1, x_block2, x_block4
-
-    def decoder(self, x_block0, x_block1, x_block2, x_block4):
-        out = F.relu(self.bn(self.conv(x_block4))) # 512->512, H/8->H/8
-        out = self.up3(out, x_block2, [x_block2.size(2), x_block2.size(3), x_block2.size(4)]) # 512,64->256, H/8,H/4->H/4
-        out = self.up4(out, x_block1, [x_block1.size(2), x_block1.size(3), x_block1.size(4)]) # 256,32->128, H/4,H/2->H/2
-        out = self.up5(out, x_block0, [x_block0.size(2), x_block0.size(3), x_block0.size(4)]) # 128,16->16,  H/2,H  ->H
-        return self.out_layer(out) # 16->1, H->H
-
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rank=0) -> Tensor:
+        if rank != 0:
+            return self.forward2(x)
         x_block0 = self.layer0(x) # 1->16, H->H
 
         x = self.layer1(x_block0) # 16->16, H->H
@@ -161,19 +142,58 @@ class Bi21RGT3d(nn.Module, _FuseOps):
 
         return out
 
-    
-    def forward2(self, x: Tensor, rank=None) -> Tensor:
+    @torch.no_grad()
+    def forward2(self, x: Tensor, *args, **kwargs) -> Tensor:
+        assert not self.training
         res = x
+        # t1 = time.time()
         x_block1 = self._layer012(x, 64)
+        # print(x_block1.max().item())
+        # t2 = time.time()
+        # print(f"layer012 time: {t2 - t1:.4f} seconds")
+
         x_block2 = self.layer3(x_block1) # 32->64, H/2->H/4
+        # print(x_block2.max().item())
+        # t3 = time.time()
+        # print(f"layer3 time: {t3 - t2:.4f} seconds")
+
         x_block3 = self.layer4(x_block2) # 64->128, H/4->H/8
+        # print(x_block3.max().item())
+        # t4 = time.time()
+        # print(f"layer4 time: {t4 - t3:.4f} seconds")
 
         x = self.layer5(x_block3) # 128->256, H/8->H/8
+        # print(x.max().item())
+        # t5 = time.time()
+        # print(f"layer5 time: {t5 - t4:.4f} seconds")
+
         x = self.layer7(x) # 256->512, H/8->H/8
+        # print(x.max().item())
+        # t6 = time.time()
+        # print(f"layer7 time: {t6 - t5:.4f} seconds")
+
         x_block4 = self.layer8(x) # 512->512, H/8->H/8
+        # print(x_block4.max().item())
+        # t7 = time.time()
+        # print(f"layer8 time: {t7 - t6:.4f} seconds")
 
         out = F.relu(self.bn(self.conv(x_block4))) # 512->512, H/8->H/8
-        out = self.up3(out, x_block2, [x_block2.size(2), x_block2.size(3), x_block2.size(4)]) # 512,64->256, H/8,H/4->H/4
-        out = self.up4(out, x_block1, [x_block1.size(2), x_block1.size(3), x_block1.size(4)]) # 256,32->128, H/4,H/2->H/2
+        # print(out.max().item())
+        # t8 = time.time()
+        # print(f"before up3 time: {t8 - t7:.4f} seconds")
+
+        out = self.up3.chunk_conv_forward(out, x_block2, [x_block2.size(2), x_block2.size(3), x_block2.size(4)]) # 512,64->256, H/8,H/4->H/4
+        # print(out.max().item())
+        # t9 = time.time()
+        # print(f"up3 time: {t9 - t8:.4f} seconds")
+
+        out = self.up4.chunk_conv_forward(out, x_block1, [x_block1.size(2), x_block1.size(3), x_block1.size(4)]) # 256,32->128, H/4,H/2->H/2
+        # print(out.max().item())
+        # t10 = time.time()
+        # print(f"up4 time: {t10 - t9:.4f} seconds")
+
         out = self._up5(out, res, 64)
+        # print(out.max().item())
+        # t11 = time.time()
+        # print(f"up5 time: {t11 - t10:.4f} seconds")
         return self.out_layer[1](out)

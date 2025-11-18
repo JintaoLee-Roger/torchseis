@@ -1,3 +1,8 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
+
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
@@ -179,11 +184,12 @@ class ResNet(nn.Module):
             out = self.layer2[i]._forward_conv_chunk(out)
         # out = self.layer2(out)
 
-        out = self.layer3(out)
+        for i in range(self.layers[2]):
+            out = self.layer3[i]._forward_conv_chunk(out)
 
-        # for i in range(self.layers[3]):
-        #     out = self.layer4[i]._forward_conv_chunk(out)
-        out = self.layer4(out)
+        for i in range(self.layers[3]):
+            out = self.layer4[i]._forward_conv_chunk(out)
+        # out = self.layer4(out)
         return out, low_level_feat
 
 
@@ -246,6 +252,28 @@ class ASPP(nn.Module):
         x = self.bn1(x)
         x = self.relu(x)
         return self.dropout(x)
+    
+    def _forward_conv_chunk(self, x: Tensor) -> Tensor:
+        x1 = Conv3dChunked(self.aspp1[0], 32)(x)
+        x1 = self.aspp1[1:](x1)
+        x2 = Conv3dChunked(self.aspp2[0], 32)(x)
+        x2 = self.aspp2[1:](x2)
+        x3 = Conv3dChunked(self.aspp3[0], 32)(x)
+        x3 = self.aspp3[1:](x3)
+        x4 = Conv3dChunked(self.aspp4[0], 32)(x)
+        x4 = self.aspp4[1:](x4)
+        x5 = self.global_avg_pool(x)
+        x5 = F.interpolate(
+            x5,
+            size=x4.size()[2:],
+            mode='trilinear',
+            align_corners=True,
+        )
+        x = torch.cat((x1, x2, x3, x4, x5), dim=1)
+        x = Conv3dChunked(self.conv1, 32)(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        return self.dropout(x) 
 
 
 class Decoder(nn.Module):

@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
 """
 FaultSeg3DPlus model is a 3D convolutional U-Net for seismic fault segmentation.
 
@@ -102,7 +106,7 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
         self.conv10 = nn.Conv3d(nf1, 1, kernel_size=1)
 
     def forward(self, x: Tensor, rank=0) -> Tensor:
-        if rank > 0:
+        if rank != 0:
             return self.forward2(x, rank - 1)
         encoder_features = []
 
@@ -144,11 +148,14 @@ class FaultSeg3dPlus(nn.Module, FuseOps):
 
         return torch.sigmoid(out)
 
-    def forward2(self, x: Tensor, rank: int = 0) -> Tensor:
+    @torch.no_grad()
+    def forward2(self, x: Tensor, rank: int = 0, *args, **kwargs) -> Tensor:
         """
         rank 1: (1024, 1024, 768), 94.6GB
         rank 2: (2048, 1024, 1024) 95 GB
         """
+        if rank < 0:
+            rank = 2
         assert not self.training
         assert rank in [0, 1, 2]
         res = x

@@ -5,6 +5,7 @@ from torch.nn import functional as F
 from ...ops.chunked.conv import Conv3dChunked, set_pad_as_zero
 from ...ops.chunked.chunk_base import get_index
 from ...ops.chunked.interpolate import trilinear_interpolate_align_corners
+from ...ops.chunked.triton_interp3d import trilinear_interpolate_align_corners_triton as trinterp3d
 
 
 class hswish(nn.Module):
@@ -55,7 +56,7 @@ class SeModule(nn.Module):
         y = Conv3dChunked(self.se[4], bsize)(y)
         y = self.se[5:](y)
         return x * y
-    
+
     def chunk_forward(self, x: Tensor, padlist: list, indices) -> Tensor:
         # y = self.se[0](x)
         # y = self.se[1](y)
@@ -134,7 +135,7 @@ class BasicBlock(nn.Module):
             x = x + self.shortcut[1](y)
 
         return x
-    
+
     def chunk_forward(self, x: Tensor, padlist: list, indices) -> Tensor:
         res = x
         x = self.nolinear1(self.bn1(self.conv1(x)))
@@ -191,7 +192,7 @@ class UpConv(nn.Module):
         x = Conv3dChunked(self.layer2[3], bsize)(x)
         x = self.layer2[4:](x)
         return x
-    
+
     def chunk_forward(self, x: Tensor, padlist: list) -> Tensor:
         x = self.layer1[:3](x)
         x = set_pad_as_zero(x, padlist)
@@ -225,7 +226,7 @@ class UP(nn.Module):
         x = Conv3dChunked(self.up[0], bsize)(x)
         x = self.up[1:](x)
         return x
-    
+
     def chunk_forward(self, x: Tensor, padlist: list) -> Tensor:
         # NOTE: We don't interpolate here, because the full size is not known.
         x = self.up(x)
@@ -234,6 +235,7 @@ class UP(nn.Module):
 
 
 class _FuseOps:
+
     def down_fuse(
         self,
         x: Tensor,
@@ -242,7 +244,7 @@ class _FuseOps:
         pool: nn.MaxPool3d = None,
     ) -> Tensor:
         b, c, d, h, w = x.shape
-        pad = 1
+        pad = 2
 
         oc = conv.outc
         if onlydown:
@@ -259,9 +261,13 @@ class _FuseOps:
         nb_h = (h + bsize - 1) // bsize
         nb_w = (w + bsize - 1) // bsize
 
-        for i, j, k in itertools.product(range(nb_d), range(nb_h), range(nb_w)):
+        for i, j, k in itertools.product(range(nb_d), range(nb_h),
+                                         range(nb_w)):
             v_d0, v_h0, v_w0, v_d1, v_h1, v_w1, p_d0, p_h0, p_w0, p_d1, p_h1, p_w1, r_d0, r_h0, r_w0, r_d1, r_h1, r_w1, o_d0, o_h0, o_w0, o_d1, o_h1, o_w1, padlist = get_index(i, j, k, bsize, (d, h, w), pad, scale) # yapf: disable
-            indices = (slice(None), slice(None), slice(int(r_d0/scale), int(r_d1/scale)), slice(int(r_h0/scale), int(r_h1/scale)), slice(int(r_w0/scale), int(r_w1/scale)))
+            indices = (slice(None), slice(None),
+                       slice(int(r_d0 / scale), int(r_d1 / scale)),
+                       slice(int(r_h0 / scale), int(r_h1 / scale)),
+                       slice(int(r_w0 / scale), int(r_w1 / scale)))
             with torch.no_grad():
                 patchi = x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
                 patchi = F.pad(patchi, padlist, mode='constant', value=0)
@@ -274,21 +280,26 @@ class _FuseOps:
         return out
 
 
-    def up_fuse(self, x: Tensor, y: Tensor, conv: BasicBlock, up: UpConv, conv_last=None):
+    def up_fuse(self,
+                x: Tensor,
+                y: Tensor,
+                conv: BasicBlock,
+                up: UpConv,
+                conv_last=None):
         """
         x = up(x)
         x = torch.cat([y, x], dim=1)
         x = conv(x)
         """
         b, c, d, h, w = x.shape
-        pad = 2
+        pad = 4
 
         if conv_last is None:
             oc = conv.outc
         else:
             oc = self.out_c
 
-        oshape = (b, oc, d*2, h*2, w*2)
+        oshape = (b, oc, d * 2, h * 2, w * 2)
         scale = 2
 
         out = torch.zeros(oshape, device=x.device, dtype=x.dtype)
@@ -298,18 +309,27 @@ class _FuseOps:
         nb_h = (h + bsize - 1) // bsize
         nb_w = (w + bsize - 1) // bsize
 
-        for i, j, k in itertools.product(range(nb_d), range(nb_h), range(nb_w)):
+        for i, j, k in itertools.product(range(nb_d), range(nb_h),
+                                         range(nb_w)):
             v_d0, v_h0, v_w0, v_d1, v_h1, v_w1, p_d0, p_h0, p_w0, p_d1, p_h1, p_w1, r_d0, r_h0, r_w0, r_d1, r_h1, r_w1, o_d0, o_h0, o_w0, o_d1, o_h1, o_w1, padlist = get_index(i, j, k, bsize, (d, h, w), pad, scale) # yapf: disable
-            padlist2 = [f*2 for f in padlist]
+            padlist2 = [f * 2 for f in padlist]
+            # indices = (slice(None), slice(None),
+            #            slice(int(r_d0 / scale), int(r_d1 / scale)),
+            #            slice(int(r_h0 / scale), int(r_h1 / scale)),
+            #            slice(int(r_w0 / scale), int(r_w1 / scale)))
             with torch.no_grad():
                 patchi = x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
+                if patchi.numel() == 0:
+                    continue
                 # NOTE: We interplote here instead of in up.chunk_forward
                 # NOTE: interpolating, then following by padding
-                patchi = trilinear_interpolate_align_corners(patchi, (d, h, w), (p_d0, p_h0, p_w0), scale)
+                patchi = trinterp3d(patchi, (d, h, w), (p_d0, p_h0, p_w0), scale)
+                # patchi = trilinear_interpolate_align_corners(patchi, (d, h, w), (p_d0, p_h0, p_w0), scale)
+                # patchi = F.interpolate(patchi, scale_factor=2, mode='trilinear')
                 patchi = F.pad(patchi, padlist2, mode='constant', value=0)
                 patchi = up.chunk_forward(patchi, padlist2)
 
-                patchj = y[:, :, p_d0*2:p_d1*2, p_h0*2:p_h1*2, p_w0*2:p_w1*2]
+                patchj = y[:, :, p_d0 * 2:p_d1 * 2, p_h0 * 2:p_h1 * 2, p_w0 * 2:p_w1 * 2]
                 patchj = F.pad(patchj, padlist2, mode='constant', value=0)
                 if conv_last is not None:
                     patchj = self.conv1.chunk_forward(patchj, padlist2, None)

@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Jintao Li.
+# Zhejiang University (ZJU).
 # University of Science and Technology of China (USTC).
 # All rights reserved.
 """
@@ -7,9 +8,26 @@ This file contains some manual implementations of normalization functions.
 These functions are used to chunked calculation by feeding the pre-computed `mean` and `var`.
 """
 
+import itertools
 import torch
 from torch import Tensor, nn
 from .statistics import ChunkStatistics
+
+
+def cal_mean_and_var(x: Tensor, norm='instance'):
+    stats = ChunkStatistics(5, norm=norm)
+    b, c, d, h, w = x.shape
+    nd, nh, nw = 1, 1, 1
+    if d % 2 == 0: nd = 2
+    if h % 2 == 0: nh = 2
+    if w % 2 == 0: nw = 2
+    bd, bh, bw = d//nd, h//nh, w//nw
+
+    for ic in range(c):
+        for i, j, k in itertools.product(range(nd), range(nh), range(nw)):
+            stats.add_batch(x[:, ic:ic+1, i*bd:(i+1)*bd, j*bh:(j+1)*bh, k*bw:(k+1)*bw])
+    stats.compute()
+    return stats.mean, stats.var
 
 
 class AdaptiveInstanceNorm3d(nn.InstanceNorm3d):
@@ -134,6 +152,7 @@ def instance_norm(
     weight: Tensor = None,
     bias: Tensor = None,
     inplace: bool = False,
+    keep_dtype: bool = False,
 ) -> Tensor:
     """
     Instance Normalization for multi-dimensional inputs (N, C, *), supporting float16 computation.
@@ -154,10 +173,10 @@ def instance_norm(
     input_shape = x.shape
     input_dtype = x.dtype
     N, C = input_shape[:2]
-    spatial_dims = tuple(range(2, x.dim()))
     x = x.view(N, C, -1)
+    spatial_dims = tuple(range(2, x.dim()))
 
-    if input_dtype == torch.float16:
+    if input_dtype == torch.float16 and not keep_dtype:
         x = x.float()
         if mean is not None: mean = mean.float()
         if var is not None: var = var.float()

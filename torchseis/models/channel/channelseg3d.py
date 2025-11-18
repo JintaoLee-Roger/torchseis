@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
 """
 ChannelSeg3d is a 3D channel segmentation model for seismic images, which adopts the Deeplab V3 architecture.
 
@@ -34,21 +38,27 @@ class ChannelSeg3d(nn.Module):
         self.decoder = Decoder(num_classes, norm=norm)
 
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, rank=0) -> Tensor:
+        if rank != 0:
+            return self.forward2(x)
         origsize = x.size()[2:]
         x,low_level_feat = self.resnet(x) # [c=2048,H/16], [c=256, H/4]
         x = self.aspp(x) # [c=256, H/16]
         x = self.decoder(x, low_level_feat) # [c=2, H/4]
         x = F.interpolate(x, size=origsize, mode='trilinear', align_corners=True)
         return x
-    
-    def forward2(self, x: Tensor) -> Tensor:
+
+    @torch.no_grad()
+    def forward2(self, x: Tensor, *args, **kwargs) -> Tensor:
+        assert not self.training
         origsize = x.size()[2:]
         x, low_level_feat = self._resnet_chunk(x)
         x = self.aspp(x)
         x = self.decoder._forward_conv_chunk(x, low_level_feat)
-        x = F.interpolate(x, size=origsize, mode='trilinear', align_corners=True)
-        # x = interpolate3d_chunked(x, 64, 4, 'trilinear', True)
+        if origsize[0] * origsize[1] * origsize[2] > 1024**3:
+            x = interpolate3d_chunked(x, 32, 4, 'trilinear', True)
+        else:
+            x = F.interpolate(x, size=origsize, mode='trilinear', align_corners=True)
         return x
 
     def _resnet_chunk(self, x: Tensor) -> Tensor:

@@ -4,6 +4,7 @@
 *.checkpoint
 *.checkpoints
 *.npy
+*.npz
 *.segy
 *.Segy 
 *.Sgy
@@ -24,7 +25,9 @@ test_*
 pretrained/*
 .DS_Store
 data/*
-
+logs/*
+results/*
+.vscode/*
 
 
 

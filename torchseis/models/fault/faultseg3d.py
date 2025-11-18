@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
 """
 FaultSeg3D model is a 3D convolutional U-Net for seismic fault segmentation.
 
@@ -102,8 +106,8 @@ class FaultSeg3d(nn.Module, FuseOps):
         self.conv8 = nn.Conv3d(16, 1, kernel_size=1)
 
     def forward(self, x: Tensor, rank: int = 0) -> Tensor:
-        if rank > 0:
-            return self.forward2(x, rank - 1)
+        if rank not in [0, 1]:
+            return self.forward2(x, rank - 2)
         encoder_features = []
 
         enc1 = self.conv1(x)
@@ -120,26 +124,38 @@ class FaultSeg3d(nn.Module, FuseOps):
 
         out = self.conv4(out)
 
-        out = self.up5(out)
+        if rank == 0:
+            out = self.up5(out)
+        else:
+            out = UpsampleChunked(self.up5, 64)(out)
         # NOTE: out is in the first position
         out = torch.cat([out, encoder_features[2]], dim=1)
         out = self.conv5(out)
 
-        out = self.up6(out)
+        if rank == 0:
+            out = self.up6(out)
+        else:
+            out = UpsampleChunked(self.up6, 64)(out)
         out = torch.cat([out, encoder_features[1]], dim=1)
         out = self.conv6(out)
 
-        out = self.up7(out)
+        if rank == 0:
+            out = self.up7(out)
+        else:
+            out = UpsampleChunked(self.up7, 64)(out)
         out = torch.cat([out, encoder_features[0]], dim=1)
         out = self.conv7(out)
         out = torch.sigmoid(self.conv8(out))
 
         return out
 
-    def forward2(self, x: Tensor, rank: int = 0) -> Tensor:
+    @torch.no_grad()
+    def forward2(self, x: Tensor, rank: int = 0, *args, **kwargs) -> Tensor:
         """
         rank 2: (1536, 1536, 1536) 91 GB
         """
+        if rank < 0:
+            rank = 2
         assert not self.training
         res = x
         encoder_features = []

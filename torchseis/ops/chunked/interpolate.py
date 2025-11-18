@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Jintao Li.
+# Zhejiang University (ZJU).
 # University of Science and Technology of China (USTC).
 # All rights reserved.
 
@@ -6,6 +7,7 @@ import itertools
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from .triton_interp3d import trilinear_interpolate_align_corners_triton as trinterp3d
 
 
 def replace_upsample(module: nn.Module, bsize: int = 32):
@@ -51,16 +53,15 @@ class UpsampleChunked(nn.Module):
 
 def trilinear_interpolate_align_corners(
     input_tensor: Tensor,
-    orig_size: tuple,
-    start: tuple,
+    orig_size: tuple[int, int, int],
+    start: tuple[int, int, int],
     scale_factor: int = 2,
     force_fp32: bool = False,
-) -> Tensor:
+) -> Tensor:  # TODO: boost performance
     """
     Note that when using chunked method, the boundary is not correct.
     So we need to handle the boundary manually.
     Besides, compare with F.interpolate, there is noticeable difference (1e-2 for half precision).
-    # NOTE: I'm not sure if this need to pad first
 
     Parameters:
     ------------
@@ -126,9 +127,9 @@ def trilinear_interpolate_align_corners(
     w1 = torch.min(w0 + 1, torch.tensor(W_or - 1, device=input_tensor.device))
 
     # calculate the fractional part
-    dd = (d_in - d0.float()).view(-1, 1, 1)  # shape [D_out, 1, 1]
-    hh = (h_in - h0.float()).view(1, -1, 1)  # shape [1, H_out, 1]
-    ww = (w_in - w0.float()).view(1, 1, -1)  # shape [1, 1, W_out]
+    dd = (d_in - d0.float()).view(1, 1, -1, 1, 1)  # shape [D_out, 1, 1]
+    hh = (h_in - h0.float()).view(1, 1, 1, -1, 1)  # shape [1, H_out, 1]
+    ww = (w_in - w0.float()).view(1, 1, 1, 1, -1)  # shape [1, 1, W_out]
 
     # shift d0, h0, w0 d1, h1, w1 to the position of input_tensor
     d0 = d0 - ds
@@ -148,34 +149,24 @@ def trilinear_interpolate_align_corners(
     d0_grid, h0_grid, w0_grid = torch.meshgrid(d0, h0, w0, indexing='ij')
     d1_grid, h1_grid, w1_grid = torch.meshgrid(d1, h1, w1, indexing='ij')
 
-    output = torch.zeros(
-        (batch, channel, D_out, H_out, W_out),
-        device=input_tensor.device,
-        dtype=input_tensor.dtype,
-    )
+    c000 = input_tensor[:, :, d0_grid, h0_grid, w0_grid]
+    c001 = input_tensor[:, :, d0_grid, h0_grid, w1_grid]
+    c010 = input_tensor[:, :, d0_grid, h1_grid, w0_grid]
+    c011 = input_tensor[:, :, d0_grid, h1_grid, w1_grid]
+    c100 = input_tensor[:, :, d1_grid, h0_grid, w0_grid]
+    c101 = input_tensor[:, :, d1_grid, h0_grid, w1_grid]
+    c110 = input_tensor[:, :, d1_grid, h1_grid, w0_grid]
+    c111 = input_tensor[:, :, d1_grid, h1_grid, w1_grid]
 
-    for b in range(batch):
-        for c in range(channel):
-            c000 = input_tensor[b, c, d0_grid, h0_grid, w0_grid]
-            c001 = input_tensor[b, c, d0_grid, h0_grid, w1_grid]
-            c010 = input_tensor[b, c, d0_grid, h1_grid, w0_grid]
-            c011 = input_tensor[b, c, d0_grid, h1_grid, w1_grid]
-            c100 = input_tensor[b, c, d1_grid, h0_grid, w0_grid]
-            c101 = input_tensor[b, c, d1_grid, h0_grid, w1_grid]
-            c110 = input_tensor[b, c, d1_grid, h1_grid, w0_grid]
-            c111 = input_tensor[b, c, d1_grid, h1_grid, w1_grid]
+    c00 = c000 * (1 - ww) + c001 * ww
+    c01 = c010 * (1 - ww) + c011 * ww
+    c10 = c100 * (1 - ww) + c101 * ww
+    c11 = c110 * (1 - ww) + c111 * ww
 
-            c00 = c000 * (1 - ww) + c001 * ww
-            c01 = c010 * (1 - ww) + c011 * ww
-            c10 = c100 * (1 - ww) + c101 * ww
-            c11 = c110 * (1 - ww) + c111 * ww
+    c0 = c00 * (1 - hh) + c01 * hh
+    c1 = c10 * (1 - hh) + c11 * hh
 
-            c0 = c00 * (1 - hh) + c01 * hh
-            c1 = c10 * (1 - hh) + c11 * hh
-
-            output[b, c] = c0 * (1 - dd) + c1 * dd
-
-    return output.to(dtype)
+    return (c0 * (1 - dd) + c1 * dd).to(dtype)
 
 
 def interpolate3d_chunked(
@@ -184,6 +175,7 @@ def interpolate3d_chunked(
     scale_factor: int = 2,
     mode: str = 'nearest',
     align_corners: bool | None = None,
+    use_triton: bool = True
 ) -> Tensor:
     """
     if set align_corners to True, there is noticeable difference compared with F.interpolate (1e-2 for half precision).
@@ -209,7 +201,7 @@ def interpolate3d_chunked(
 
     out = torch.zeros(outshape, device=x.device, dtype=x.dtype)
 
-    tsize = bsize - pad * 2
+    tsize = bsize - 2 * pad
     nb_d = (d + tsize - 1) // tsize
     nb_h = (h + tsize - 1) // tsize
     nb_w = (w + tsize - 1) // tsize
@@ -248,13 +240,23 @@ def interpolate3d_chunked(
 
         with torch.no_grad():
             patchi = x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
+            if patchi.numel() == 0:
+                continue
             if align_corners:
-                patcho = trilinear_interpolate_align_corners(
-                    patchi,
-                    (d, h, w),
-                    (p_d0, p_h0, p_w0),
-                    scale_factor,
-                )
+                if use_triton:
+                    patcho = trinterp3d(
+                        patchi,
+                        (d, h, w),
+                        (p_d0, p_h0, p_w0),
+                        scale_factor,
+                    )
+                else:
+                    patcho = trilinear_interpolate_align_corners(
+                        patchi,
+                        (d, h, w),
+                        (p_d0, p_h0, p_w0),
+                        scale_factor,
+                    )
             else:
                 patcho = F.interpolate(
                     patchi,

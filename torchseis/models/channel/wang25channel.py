@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Jintao Li. 
+# Zhejiang University (ZJU).
+# All rights reserved.
+
 """
 To cite this model:
 ```text
@@ -54,7 +58,7 @@ class Wang25Channel(nn.Module, _FuseOps):
         )
 
     def forward(self, x: Tensor, rank: int = 0) -> Tensor:
-        if rank > 0 and self.eval():
+        if rank != 0 and self.eval():
             return self.forward2(x, rank-1)
         d1 = self.dconv1(x)
         d2 = self.down1(d1)
@@ -84,11 +88,14 @@ class Wang25Channel(nn.Module, _FuseOps):
 
         return out
 
-    def forward2(self, x: Tensor, rank=0) -> Tensor:
+    @torch.no_grad()
+    def forward2(self, x: Tensor, rank=0, *args, **kwargs) -> Tensor:
         """
         This method is a placeholder for compatibility with the original model's interface.
         It simply calls the forward method.
         """
+        if rank < 0:
+            rank = 2
         assert not self.training
         assert rank in [0, 1, 2]
 

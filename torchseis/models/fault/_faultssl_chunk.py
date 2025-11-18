@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Jintao Li.
+# Zhejiang University (ZJU).
 # University of Science and Technology of China (USTC).
 # All rights reserved.
 
@@ -9,6 +10,7 @@ from torch.nn import functional as F
 from ...ops.chunked.conv import set_pad_as_zero
 from ...ops.chunked.norms import AdaptiveInstanceNorm3d
 from ...ops.fuse import ConvInstanceNorm3d
+
 
 def get_index(i, j, k, bsize, shape, pad, scale=1):
     v_d0 = i * bsize
@@ -68,12 +70,14 @@ class FaultSSLChunk:
         if t == 0:
             self.input_layer1[1].stats.add_batch(x[indices])
             return x
-        elif self.mode == 'iou' and not self.input_layer1[1].stats.has_statistics():
+        elif self.mode == 'iou' and not self.input_layer1[
+                1].stats.has_statistics():
             self.input_layer1[1].stats.compute()
             if self.fused:
                 mean = self.input_layer1[1].stats.mean
                 var = self.input_layer1[1].stats.var
-                self.input_layer1[0] = ConvInstanceNorm3d(self.input_layer1[0], self.input_layer1[1], mean, var)
+                self.input_layer1[0] = ConvInstanceNorm3d(
+                    self.input_layer1[0], self.input_layer1[1], mean, var)
                 self.input_layer1[1].fused = True
 
         x = self.input_layer1[1](x)
@@ -98,7 +102,8 @@ class FaultSSLChunk:
         if t == 2:
             self.Decoder2[2].stats.add_batch(x[indices2])
             return x
-        elif self.mode == 'iou' and not self.Decoder2[2].stats.has_statistics():
+        elif self.mode == 'iou' and not self.Decoder2[2].stats.has_statistics(
+        ):
             self.Decoder2[2].stats.compute()
 
         x = self.Decoder2[2](x)
@@ -137,13 +142,16 @@ class FaultSSLChunk:
         # oshape = (b, 6, d, h, w)
         out = torch.zeros(oshape, device=x.device, dtype=x.dtype)
         if not isinstance(self.input_layer1[1], AdaptiveInstanceNorm3d):
-            self.input_layer1[1] = AdaptiveInstanceNorm3d.from_instance_norm(self.input_layer1[1])
+            self.input_layer1[1] = AdaptiveInstanceNorm3d.from_instance_norm(
+                self.input_layer1[1])
 
         self.input_layer1[3].replace_norm()
         self.input_layer1[4].replace_norm()
         if down:
             if not isinstance(self.input_layer2[1], AdaptiveInstanceNorm3d):
-                self.input_layer2[1] = AdaptiveInstanceNorm3d.from_instance_norm(self.input_layer2[1])
+                self.input_layer2[
+                    1] = AdaptiveInstanceNorm3d.from_instance_norm(
+                        self.input_layer2[1])
 
         nt = 9
         for t in range(nt):
@@ -152,36 +160,46 @@ class FaultSSLChunk:
                 v_d0, v_h0, v_w0, v_d1, v_h1, v_w1, p_d0, p_h0, p_w0, p_d1, p_h1, p_w1, r_d0, r_h0, r_w0, r_d1, r_h1, r_w1, o_d0, o_h0, o_w0, o_d1, o_h1, o_w1, padlist = get_index(i, j, k, bsize, (d, h, w), pad, scale) # yapf: disable
 
                 if down:
-                    indices1 = (slice(None), slice(None), slice(r_d0*2, r_d1*2), slice(r_h0*2, r_h1*2), slice(r_w0*2, r_w1*2))
-                    indices2 = (slice(None), slice(None), slice(r_d0, r_d1), slice(r_h0, r_h1), slice(r_w0, r_w1))
+                    indices1 = (slice(None), slice(None),
+                                slice(r_d0 * 2,
+                                      r_d1 * 2), slice(r_h0 * 2, r_h1 * 2),
+                                slice(r_w0 * 2, r_w1 * 2))
+                    indices2 = (slice(None), slice(None), slice(r_d0, r_d1),
+                                slice(r_h0, r_h1), slice(r_w0, r_w1))
                 else:
-                    indices1 = (slice(None), slice(None), slice(r_d0, r_d1), slice(r_h0, r_h1), slice(r_w0, r_w1)) 
-                    indices2 = None   
+                    indices1 = (slice(None), slice(None), slice(r_d0, r_d1),
+                                slice(r_h0, r_h1), slice(r_w0, r_w1))
+                    indices2 = None
 
                 with torch.no_grad():
                     patchi = x[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
                     patchi = F.pad(patchi, padlist, mode='constant', value=0)
-                    patcho = self._input_layer1_chunk(patchi, padlist, t, indices1)
+                    patcho = self._input_layer1_chunk(patchi, padlist, t,
+                                                      indices1)
                     if down and t >= nt - 2:
                         patcho = self.input_layer2[0](patcho)
                         if t == nt - 2:
-                            self.input_layer2[1].stats.add_batch(patcho[indices2])
+                            self.input_layer2[1].stats.add_batch(
+                                patcho[indices2])
                         elif not self.input_layer2[1].stats.has_statistics():
                             self.input_layer2[1].stats.compute()
                             if self.fused:
                                 mean = self.input_layer2[1].stats.mean
                                 var = self.input_layer2[1].stats.var
-                                self.input_layer2[0] = ConvInstanceNorm3d(self.input_layer2[0], self.input_layer2[1], mean, var)
+                                self.input_layer2[0] = ConvInstanceNorm3d(
+                                    self.input_layer2[0], self.input_layer2[1],
+                                    mean, var)
                                 self.input_layer2[1].fused = True
 
                         if t == nt - 1:
                             patcho = self.input_layer2[1:3](patcho)
 
-                    if t == nt-1:
+                    if t == nt - 1:
                         out[:, :, o_d0:o_d1, o_h0:o_h1, o_w0:o_w1] = patcho[:, :, r_d0:r_d1, r_h0:r_h1, r_w0:r_w1] # yapf: disable
 
-        self.input_layer2[1].stats.reset()
-        self.input_layer2[1].fused = False
+        if down:
+            self.input_layer2[1].stats.reset()
+            self.input_layer2[1].fused = False
         return out
 
     def _input_layer1(self,
@@ -223,7 +241,17 @@ class FaultSSLChunk:
 
         return out
 
-    def _decoder232(self, x: Tensor, skip2: Tensor, inp: Tensor) -> Tensor:
+    def _decoder232(
+        self,
+        x: Tensor,
+        skip2: Tensor,
+        skip1: Tensor = None,
+        inp: Tensor = None,
+    ) -> Tensor:
+        assert inp is not None or skip1 is not None
+        recomp = True
+        if skip1 is not None:
+            recomp = False
         b, c, d, h, w = x.shape
         oshape = (b, 1, d * 2, h * 2, w * 2)
         bsize = 32
@@ -238,16 +266,21 @@ class FaultSSLChunk:
         self.Decoder2[4].replace_norm()
 
         if not isinstance(self.Decoder2[2], AdaptiveInstanceNorm3d):
-            self.Decoder2[2] = AdaptiveInstanceNorm3d.from_instance_norm(self.Decoder2[2])
+            self.Decoder2[2] = AdaptiveInstanceNorm3d.from_instance_norm(
+                self.Decoder2[2])
 
         nt = 7
         for t in range(nt):
             for i, j, k in itertools.product(range(nb_d), range(nb_h), range(nb_w)): # yapf: disable
                 v_d0, v_h0, v_w0, v_d1, v_h1, v_w1, p_d0, p_h0, p_w0, p_d1, p_h1, p_w1, r_d0, r_h0, r_w0, r_d1, r_h1, r_w1, o_d0, o_h0, o_w0, o_d1, o_h1, o_w1, padlist = get_index(i, j, k, bsize, (d, h, w), pad, 1) # yapf: disable
 
-                indices1 = (slice(None), slice(None), slice(r_d0, r_d1), slice(r_h0, r_h1), slice(r_w0, r_w1))
+                indices1 = (slice(None), slice(None), slice(r_d0, r_d1),
+                            slice(r_h0, r_h1), slice(r_w0, r_w1))
 
-                indices2 = (slice(None), slice(None), slice(r_d0*2, r_d1*2), slice(r_h0*2, r_h1*2), slice(r_w0*2, r_w1*2)) 
+                indices2 = (slice(None), slice(None),
+                            slice(r_d0 * 2,
+                                  r_d1 * 2), slice(r_h0 * 2, r_h1 * 2),
+                            slice(r_w0 * 2, r_w1 * 2))
 
                 with torch.no_grad():
                     patchi = torch.cat([
@@ -256,10 +289,12 @@ class FaultSSLChunk:
                     ], 1)
                     patchi = F.pad(patchi, padlist, mode='constant', value=0)
                     if t == nt - 1:
-                        patcho = self.Decoder2[0].chunk_forward(patchi, padlist, t, indices1)
+                        patcho = self.Decoder2[0].chunk_forward(
+                            patchi, padlist, t, indices1)
                         out[:, :, o_d0:o_d1, o_h0:o_h1, o_w0:o_w1] = patcho[:, :, r_d0:r_d1, r_h0:r_h1, r_w0:r_w1] # yapf: disable
                     else:
-                        patcho = self._decoder2_chunk(patchi, padlist, t, indices1, indices2)
+                        patcho = self._decoder2_chunk(patchi, padlist, t,
+                                                      indices1, indices2)
 
         # return out
         x = out
@@ -366,10 +401,15 @@ class FaultSSLChunk:
                     patchi = self.Decoder2[4].chunk_forward(patchi, padlist12)
                     patchi = patchi[:, :, r1_d0:r1_d1, r1_h0:r1_h1, r1_w0:r1_w1]
 
-                    patchj = inp[:, :, p2_d0:p2_d1, p2_h0:p2_h1, p2_w0:p2_w1]
-                    patchj = F.pad(patchj, padlist2, mode='constant', value=0)
-                    patchj = self._input_layer1_chunk(patchj, padlist2)
-                    patchj = patchj[:, :, r2_d0:r2_d1, r2_h0:r2_h1, r2_w0:r2_w1]
+                    if recomp:
+                        patchj = inp[:, :, p2_d0:p2_d1, p2_h0:p2_h1, p2_w0:p2_w1]
+                        patchj = F.pad(patchj, padlist2, mode='constant', value=0)
+                        patchj = self._input_layer1_chunk(patchj, padlist2)
+                        patchj = patchj[:, :, r2_d0:r2_d1, r2_h0:r2_h1, r2_w0:r2_w1]
+                    else:
+                        patchj = skip1[:, :, p2_d0:p2_d1, p2_h0:p2_h1, p2_w0:p2_w1]
+                        patchj = F.pad(patchj, padlist2, mode='constant', value=0) 
+                        patchj = patchj[:, :, r2_d0:r2_d1, r2_h0:r2_h1, r2_w0:r2_w1]
 
                     patcho = torch.cat([patchi, patchj], 1)
                     patcho = F.pad(patcho, padlist3, mode='constant', value=0)
@@ -389,7 +429,17 @@ class FaultSSLChunk:
         self.Decoder3[0].reset()
         return out
 
-    def _decoder23(self, x: Tensor, skip2: Tensor, inp: Tensor) -> Tensor:
+    def _decoder23(
+        self,
+        x: Tensor,
+        skip2: Tensor,
+        skip1=None,
+        inp: Tensor = None,
+    ) -> Tensor:
+        assert inp is not None or skip1 is not None
+        recomp = True
+        if skip1 is not None:
+            recomp = False
         b, c, d, h, w = x.shape
         oshape = (b, 1, d * 2, h * 2, w * 2)
         out = torch.zeros_like(x)
@@ -512,10 +562,15 @@ class FaultSSLChunk:
                 patchi = self.Decoder2[4].chunk_forward(patchi, padlist12)
                 patchi = patchi[:, :, r1_d0:r1_d1, r1_h0:r1_h1, r1_w0:r1_w1]
 
-                patchj = inp[:, :, p2_d0:p2_d1, p2_h0:p2_h1, p2_w0:p2_w1]
-                patchj = F.pad(patchj, padlist2, mode='constant', value=0)
-                patchj = self._input_layer1_chunk(patchj, padlist2)
-                patchj = patchj[:, :, r2_d0:r2_d1, r2_h0:r2_h1, r2_w0:r2_w1]
+                if recomp:
+                    patchj = inp[:, :, p2_d0:p2_d1, p2_h0:p2_h1, p2_w0:p2_w1]
+                    patchj = F.pad(patchj, padlist2, mode='constant', value=0)
+                    patchj = self._input_layer1_chunk(patchj, padlist2)
+                    patchj = patchj[:, :, r2_d0:r2_d1, r2_h0:r2_h1, r2_w0:r2_w1]
+                else:
+                    patchj = skip1[:, :, p2_d0:p2_d1, p2_h0:p2_h1, p2_w0:p2_w1]
+                    patchj = F.pad(patchj, padlist2, mode='constant', value=0)
+                    patchj = patchj[:, :, r2_d0:r2_d1, r2_h0:r2_h1, r2_w0:r2_w1]
 
                 # patcho = torch.cat([patchi, patchj], 1)
                 # out[:, :, p3_d0:p3_d1, p3_h0:p3_h1, p3_w0:p3_w1] = patcho

@@ -3,3 +3,5 @@ from .channel import ChannelSeg3d, Wang25Channel
 from .rgt import Bi21RGT3d
 from .karst import KarstSeg3d
 from .ism import DeepISMNet
+from .general import GEM
+from .medical import SegFormer3D
