@@ -1,45 +1,37 @@
+# TorchSeis: A Unified 3D Deep Learning Framework for Seismic and Subsurface Modeling
 
-# TorchSeis
+**TorchSeis** is an open research framework that explores the intersection of **deep learning, seismic data analysis, and subsurface intelligence**. It provides reusable models, operators, and experimental tools aimed at advancing AI-driven understanding of the Earth, with applications across:
 
-PyTorch-based seismic toolkit.
+- Seismic interpretation and structural analysis  (volumetric)
+- Faults, stratigraphy, channels, karst, salt bodies, and other geologic features
+- Efficient whole-volume inference without patching artifacts for ultra-large 3D datasets  
 
-## Installation
+TorchSeis is intended for both research and industrial deployment, enabling scalable, reproducible, and AI-driven subsurface understanding.
 
-```bash
-git clone https://github.com/JintaoLee-Roger/torchseis.git
-cd torchseis
-pip install -e .
+---
+
+## Contents
+
+### 📌 Full-Volume Inference Framework
+
+TorchSeis provides a **retraining-free full-volume inference framework** for 3D dense prediction, enabling seamless processing of datasets up to **1024³** or larger on a single GPU, while preserving spatial continuity and structural coherence.
+
+This work originates from the paper **"Memory-Efficient Full-Volume Inference for Large-Scale 3D Dense Prediction without Performance Degradation"**, which presents an operator-level optimization strategy that enables high-resolution inference on modern GPU hardware without degrading model accuracy.
+
+
+📄 **Details** can be found at [docs/infer25ce.md](/docs/infer25ce.md)
+
+
+
+## 🔬 Citation
+
+If this repository is useful for your research, please citing the relevant citations below:
+
+```bibtex
+@article{li2025infer,
+  title={Memory-Efficient Full-Volume Inference for Large-Scale 3D Dense Prediction without Performance Degradation},
+  author={Li, Jintao and Wu, Xinming},
+  journal={Communications Engineering},
+  year={2025}
+}
 ```
-
-## Quick Start
-
-```python
-import numpy as np
-import torch
-from torchseis import FaultSeg3d, FaultPipeline
-
-model = FaultSeg3d()
-params = torch.load('faultseg3d-2020-70.pth', weights_only=True)
-model.load_state_dict(params)
-pipeline = FaultPipeline(model).half().cuda()
-
-inp = np.random.randn((1024, 1024, 1024), dtype=np.float32)
-# cost 26.86 GB, 7.26s on a H20 GPU
-out = pipeline(inp, rank=3)
-```
-
-## Pretrained Weights
-
-The pretrained weights can be download from [https://rec.ustc.edu.cn/share/5761aa30-25e7-11f0-ac2f-0bb7b749fade](https://rec.ustc.edu.cn/share/5761aa30-25e7-11f0-ac2f-0bb7b749fade) (password: 6y6a)
-
-
-
-## Model Cards
-
-| Model                    | rank | shape              | GPU Memory | Inference Time (ms) |
-|--------------------------|------|--------------------|------------|---------------------|
-| FaultSeg3d               |   3  | (1024, 1024, 1024) | 26.86 GB   | 7.26s               |
-| FaultSeg3dPlus           |   3  | (1024, 1024, 1024) | 56.75 GB   | 14.56s              |
-| FaultSSL-precision       |   3  | (1024, 1024, 1024) | 57.73 GB   | 53.43s              |
-| FaultSSL-precision(fuse) |   3  | (1024, 1024, 1024) | 57.73 GB   | 34.42s              |
-| FaultSSL-iou             |   3  | (1024, 1024, 1024) | 58.19 GB   | 162.1s              |
