@@ -26,7 +26,7 @@ pretrained/*
 .DS_Store
 data/*
 logs/*
-results/*
+results_copy/*
 .vscode/*
 
 
