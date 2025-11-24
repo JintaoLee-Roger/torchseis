@@ -177,9 +177,70 @@ def interpolate3d_chunked(
     align_corners: bool | None = None,
     use_triton: bool = True
 ) -> Tensor:
+    r"""
+    Chunked 3D upsampling for very large tensors.
+
+    This function splits the input volume into smaller 3D blocks and applies
+    local interpolation (``torch.nn.functional.interpolate`` for ``nearest`` or
+    a custom trilinear kernel), and then writes back the results into the
+    corresponding region of a preallocated output tensor.
+
+    The primary motivation is **not memory saving**, but to **avoid indexing
+    overflow and kernel instability** in PyTorch's GPU interpolation kernels
+    when processing extremely large 5D tensors (e.g. ``(B, C, D, H, W)`` with
+    large spatial sizes). This becomes particularly critical when using **FP16**
+    on GPU, where ``F.interpolate`` may produce noticeable errors compared with
+    the mathematically correct result.
+
+    Notes
+    -----
+    * For ``mode='nearest'`` the chunked version tends to be **more numerically
+      reliable on GPU FP16** than performing a full-volume
+      ``F.interpolate(x, ..., mode='nearest')``. The full-volume version can
+      return *incorrect* values (not just precision noise) due to different
+      kernel paths or index rounding in half precision.
+    * When ``mode='trilinear'`` and ``align_corners=True``, observable
+      differences (around ``1e-2`` in FP16) can still occur due to half-precision
+      rounding, even though the implementation is mathematically aligned with
+      ``F.interpolate``.
+
+    Verification Tip
+    ----------------
+    To check numerical correctness of the chunked implementation, it is
+    recommended to compare against CPU ``float32`` interpolation:
+
+    .. code-block:: python
+
+        x = torch.randn(...).cpu().float()
+        out_full = F.interpolate(x, scale_factor=2, mode='nearest')
+        out_chunk = interpolate3d_chunked(x, bsize=64, scale_factor=2, mode='nearest')
+        print(torch.allclose(out_full, out_chunk, atol=1e-6))
+
+    On GPU FP16, large 3D inputs may make ``F.interpolate`` produce inconsistent
+    results, so **CPU results should be treated as the ground truth for testing
+    correctness**, not the GPU FP16 version.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input tensor of shape ``(B, C, D, H, W)``.
+    bsize : int
+        Block size for chunking along spatial dimensions.
+    scale_factor : int, default=2
+        Upsampling scale factor (currently supports uniform scaling).
+    mode : {'nearest', 'trilinear'}
+        Interpolation mode.
+    align_corners : bool or None
+        Same semantics as ``F.interpolate`` (only used for trilinear).
+    use_triton : bool
+        Whether to use a Triton kernel for trilinear interpolation.
+
+    Returns
+    -------
+    Tensor
+        Upsampled tensor of shape ``(B, C, D*scale_factor, H*scale_factor, W*scale_factor)``.
     """
-    if set align_corners to True, there is noticeable difference compared with F.interpolate (1e-2 for half precision).
-    """
+
     assert mode in [
         'nearest', 'trilinear'
     ], f"Only support 'nearest' or 'trilinear' mode, but got {mode}"

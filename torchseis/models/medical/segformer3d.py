@@ -594,8 +594,6 @@ class SegFormerDecoderHead(nn.Module):
         oc = self.linear_pred.out_channels
         out = torch.zeros((b, oc, d, h, w), device=c1.device, dtype=c1.dtype)
 
-        
-
         bsize = 64
         nb_d = (d + bsize - 1) // bsize
         nb_h = (h + bsize - 1) // bsize
@@ -609,7 +607,7 @@ class SegFormerDecoderHead(nn.Module):
                 patch2 = c2[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
                 patch3 = c3[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
                 patch4 = c4[:, :, p_d0:p_d1, p_h0:p_h1, p_w0:p_w1]
-                patchi = torch.cat([patch1, patch2, patch2, patch4], 1)
+                patchi = torch.cat([patch1, patch2, patch3, patch4], 1)
                 patchi = self.linear_fuse(patchi)
                 patchi = self.linear_pred(patchi)
                 out[:, :, o_d0:o_d1, o_h0:o_h1, o_w0:o_w1] = patchi[:, :, r_d0:r_d1, r_h0:r_h1, r_w0:r_w1]

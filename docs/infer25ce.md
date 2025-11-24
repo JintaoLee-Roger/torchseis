@@ -52,7 +52,12 @@ with torch.no_grad():
 
 ## 🧠 Model Zoo Compatibility
 
-The full-volume inference method is compatible with the following TorchSeis models:
+The full-volume inference method is compatible with the following TorchSeis models, which are available in the [torchseis-efficiency-infer](https://huggingface.co/shallowclose/torchseis-efficiency-infer) on **Hugging Face Hub**. Besides, these models can also be accessed via **Baidu Netdisk**:
+
+通过网盘分享的文件：torchseis-efficiency-infer
+链接: [https://pan.baidu.com/s/1ygUPYIO0S1AvsU4-IMz4pg?pwd=y7cn](https://pan.baidu.com/s/1ygUPYIO0S1AvsU4-IMz4pg?pwd=y7cn) 提取码: y7cn
+
+
 
 | Model            | Task                                           | Source           |
 | ---------------- | ---------------------------------------------- | ---------------- |
@@ -73,6 +78,14 @@ The full-volume inference method is compatible with the following TorchSeis mode
 
 ## 📊 Results Summary
 
+The performance evaluations, visual comparisons, and numerical errors reported in our Communications Engineering (2025) paper are fully reproducible.
+
+All plotting scripts and evaluation utilities can be found under `scripts/infer25ce/`.
+
+This directory contains:
+- **Fig. 3** – Runtime and memory usage comparisons across models
+- **Fig. S1** – Runtime and memory usage comparisons across models
+- **Table S1** – Numerical error statistics (full vs. chunked inference)
 
 ---
 
