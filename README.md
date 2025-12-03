@@ -22,6 +22,13 @@ This work originates from the paper **"Memory-Efficient Full-Volume Inference fo
 📄 **Details** can be found at [docs/infer25ce.md](/docs/infer25ce.md)
 
 
+### 🧭 Seismic Operators & Attributes
+
+- Impedance to Seismic with different wavelets
+- Structure Tensor Orientations
+  * see [scripts/orientations.ipynb](/scripts/orientations.ipynb) for serval examples.
+- Local Slope
+
 
 ## 🔬 Citation
 
